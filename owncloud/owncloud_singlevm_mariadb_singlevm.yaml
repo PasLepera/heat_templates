@@ -1,0 +1,367 @@
+heat_template_version: 2013-05-23
+
+description: >
+  Install an Owncloud vm, with an external MariaDB vm.
+
+parameters:
+
+  #---------------------------------------------------------------------
+  #                Global Parameters
+  #---------------------------------------------------------------------
+  key_name:
+    type: string
+    description: Name of a KeyPair to enable SSH access to the instance
+    default: "opstkcsi"  
+
+  owncloud_network:
+    type: string
+    description: Network used by the owncloud servers
+    default: "provider_318"
+
+  proxy_server:
+    type: string
+    description: Proxy Server
+    default: "http://172.25.7.10:3128"
+
+  #---------------------------------------------------------------------
+  #                Owncloud Parameters
+  #---------------------------------------------------------------------  
+
+  owncloud_instance_type:
+    type: string
+    description: >
+        Instance type for Owncloud server
+        -- maximum resources with"m1.big24.kvm"
+    default: "m1.medium.kvm"
+    
+  owcloud_image_id:
+    type: string
+    description: >
+      Name or ID of the image to use for the owncloud server.
+    default: "ubuntu16-heat"
+
+  #---------------------------------------------------------------------
+  #                MariaDB Parameters
+  #---------------------------------------------------------------------  
+  key_name:
+    type: string
+    description: Name of a KeyPair to enable SSH access to the instance
+    default: "opstkcsi"
+  mysql_instance_type:
+    type: string
+    description: >
+        Instance type for MariaDB server
+        -- maximum resources with"m1.big24.kvm"
+    default: "m1.medium.kvm"
+
+  mysql_image_id:
+    type: string
+    description: >
+      Name or ID of the image to use for the mariadb server.
+    default: "ubuntu16-heat"
+
+  db_name:
+    type: string
+    description: Owncloud database name
+    default: owncloud
+    constraints:
+      - length: { min: 1, max: 64 }
+        description: db_name must be between 1 and 64 characters
+      - allowed_pattern: '[a-zA-Z][a-zA-Z0-9]*'
+        description: >
+          db_name must begin with a letter and contain only alphanumeric
+          characters
+
+  db_username:
+    type: string
+    description: The Owncloud database admin account username
+    default: owncloud
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 16 }
+        description: db_username must be between 1 and 16 characters
+      - allowed_pattern: '[a-zA-Z][a-zA-Z0-9]*'
+        description: >
+          db_username must begin with a letter and contain only alphanumeric
+          characters
+
+  db_password:
+    type: string
+    description: The Owncloud database admin account password
+    default: owncloud
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 41 }
+        description: db_password must be between 1 and 41 characters
+      - allowed_pattern: '[a-zA-Z0-9]*'
+        description: db_password must contain only alphanumeric characters
+
+  db_root_password:
+    type: string
+    description: Root password for MySQL
+    default: owncloud
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 41 }
+        description: db_root_password must be between 1 and 41 characters
+      - allowed_pattern: '[a-zA-Z0-9]*'
+        description: db_root_password must contain only alphanumeric characters
+
+resources:
+
+  #---------------------------------------------------------------------
+  #                Owncloud Security Group
+  #---------------------------------------------------------------------  
+  owncloud_security_group:
+    type:  AWS::EC2::SecurityGroup
+    properties:
+      GroupDescription: Enable SSH access, http/https, mysql
+      SecurityGroupIngress:
+      - {CidrIp: 0.0.0.0/0, FromPort: '22', IpProtocol: tcp, ToPort: '22'}
+      - {CidrIp: 0.0.0.0/0, FromPort: '80', IpProtocol: tcp, ToPort: '80'}
+      - {CidrIp: 0.0.0.0/0, FromPort: '443', IpProtocol: tcp, ToPort: '443'}
+      - {CidrIp: 0.0.0.0/0, FromPort: '3306', IpProtocol: tcp, ToPort: '3306'}
+
+  #---------------------------------------------------------------------
+  #                Owncloud Server
+  #---------------------------------------------------------------------  
+  owncloud_instance:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: owcloud_image_id }
+      flavor: { get_param: owncloud_instance_type }
+      key_name: { get_param: key_name }
+      networks: [{network: {get_param: owncloud_network}}]
+      security_groups:
+      - {get_resource: owncloud_security_group}      
+      user_data_format: SOFTWARE_CONFIG
+
+  #---------------------------------------------------------------------
+  #                MariaDB Server
+  #---------------------------------------------------------------------  
+  mysql_instance:
+    type: OS::Nova::Server
+    properties:
+      image: { get_param: mysql_image_id }
+      flavor: { get_param: mysql_instance_type }
+      key_name: { get_param: key_name }
+      networks: [{network: {get_param: owncloud_network}}]
+      security_groups:
+      - {get_resource: owncloud_security_group}      
+      user_data_format: SOFTWARE_CONFIG
+
+  #---------------------------------------------------------------------
+  #                Owncloud Software Config
+  #---------------------------------------------------------------------  
+  config_owncloud:
+    depends_on:
+      - owncloud_instance
+      - deployment_config_mysql
+    type: OS::Heat::SoftwareConfig
+    properties:
+      inputs:
+      - name: db_name
+      - name: db_username
+      - name: db_password
+      - name: db_host
+      - name: proxy_server
+      - name: server_ip
+      group: script
+      config: |
+        #!/bin/bash -v
+        # Setup Proxy
+        export http_proxy=$proxy_server
+        export https_proxy=$proxy_server
+        # Modify /etc/hosts for name 
+        echo $server_ip $HOSTNAME | sudo tee --append /etc/hosts
+        # Sudo commands to install owncloud and its dependencies on Ubuntu 16
+        sudo -E curl https://download.owncloud.org/download/repositories/stable/Ubuntu_16.04/Release.key | sudo apt-key add -
+        sudo -E echo 'deb https://download.owncloud.org/download/repositories/stable/Ubuntu_16.04/ /' | sudo tee /etc/apt/sources.list.d/owncloud.list
+        sudo -E apt-get update -y
+        sudo -E DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dist-upgrade
+        sudo -E DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install apache2 php-pear php-dev php-mysql mysql-client 
+        sudo -E systemctl restart apache2
+        sudo -E DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install owncloud
+        # Security settings and HTTPS setup
+        sudo -E ufw app info "Apache Full"
+        sudo -E sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/certs/apache.key -out /etc/ssl/certs/apache.crt -subj "/"
+        sudo -E sudo a2enmod rewrite
+        sudo -E sudo a2enmod ssl
+        sudo -E a2ensite default-ssl
+        sudo sed -i 's/\/etc\/ssl\/certs\/ssl-cert-snakeoil.pem/\/etc\/ssl\/certs\/apache.crt/' /etc/apache2/sites-available/default-ssl.conf
+        sudo sed -i 's/\/etc\/ssl\/private\/ssl-cert-snakeoil.key/\/etc\/ssl\/certs\/apache.key/' /etc/apache2/sites-available/default-ssl.conf
+        # Avoid ServerName error in Apache
+        echo ServerName $HOSTNAME | sudo tee --append /etc/apache2/apache2.conf
+        sudo -E /etc/init.d/apache2 restart
+        # Setup files and folders permissions
+        sudo -E cat > /tmp/perms.sh <<EOF
+        #!/bin/bash
+        ocpath='/var/www/owncloud'
+        htuser='www-data'
+        htgroup='www-data'
+        rootuser='root'
+        printf "Creating possible missing Directories\n"
+        mkdir -p $ocpath/data
+        mkdir -p $ocpath/assets
+        mkdir -p $ocpath/updater
+        printf "chmod Files and Directories\n"
+        find ${ocpath}/ -type f -print0 | xargs -0 chmod 0640
+        find ${ocpath}/ -type d -print0 | xargs -0 chmod 0750
+        printf "chown Directories\n"
+        chown -R ${rootuser}:${htgroup} ${ocpath}/
+        chown -R ${htuser}:${htgroup} ${ocpath}/apps/
+        chown -R ${htuser}:${htgroup} ${ocpath}/assets/
+        chown -R ${htuser}:${htgroup} ${ocpath}/config/
+        chown -R ${htuser}:${htgroup} ${ocpath}/data/
+        chown -R ${htuser}:${htgroup} ${ocpath}/themes/
+        chown -R ${htuser}:${htgroup} ${ocpath}/updater/
+        chmod +x ${ocpath}/occ
+        printf "chmod/chown .htaccess\n"
+        if [ -f ${ocpath}/.htaccess ]
+         then
+          chmod 0644 ${ocpath}/.htaccess
+          chown ${rootuser}:${htgroup} ${ocpath}/.htaccess
+        fi
+        if [ -f ${ocpath}/data/.htaccess ]
+         then
+          chmod 0644 ${ocpath}/data/.htaccess
+          chown ${rootuser}:${htgroup} ${ocpath}/data/.htaccess
+        fi        
+        EOF
+        sudo -E chmod +x perms.sh
+        sudo ./perms.sh
+        # Configure Owncloud
+        sudo chown www-data /var/www/owncloud/occ
+        sudo -s
+        cd /var/www/owncloud/
+        sudo -u www-data php occ  maintenance:install --database "mysql" --database-name "$db_name"  --database-host "$db_host" --database-user "$db_username" --database-pass "$db_password" --admin-user "admin" --admin-pass "owncloud"
+        sudo -u www-data php occ config:system:set trusted_domains 0 --value=$server_ip
+        systemctl restart apache2
+
+  #---------------------------------------------------------------------
+  #                MariaDB Software Config
+  #---------------------------------------------------------------------  
+  config_mysql:
+    depends_on: mysql_instance
+    type: OS::Heat::SoftwareConfig
+    properties:
+      inputs:
+      - name: db_rootpassword
+      - name: db_name
+      - name: db_username
+      - name: db_password
+      - name: proxy_server
+      - name: server_ip
+      group: script
+      config: |
+        #!/bin/bash -v
+        # Setup Proxy
+        export http_proxy=$proxy_server
+        export https_proxy=$proxy_server
+        # Sudo commands to install mariadb server      
+        sudo -E apt-get update -y
+        sudo -E DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" dist-upgrade
+        sudo -E apt-get install mariadb-server -y
+        # Modify /etc/hosts for name 
+        echo $server_ip $HOSTNAME | sudo tee --append /etc/hosts
+        # Listen on every network interface
+        sudo sed -i 's/127.0.0.1/0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
+        sudo -E systemctl start mysql
+        # Make sure that NOBODY can access the server without a password
+        #mysql -e "UPDATE mysql.user SET Password = PASSWORD('CHANGEME') WHERE User = 'root'"
+        # Kill the anonymous users
+        mysql -e "DROP USER ''@'localhost'"
+        # Because our hostname varies we'll use some Bash magic here.
+        mysql -e "DROP USER ''@'$(hostname)'"
+        # Kill off the demo database
+        mysql -e "DROP DATABASE test"
+        # Disallow remote login for root 
+        #mysql -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1')"
+        # Make our changes take effect            
+        mysql -e "FLUSH PRIVILEGES"
+        # Setup MySQL root password and create a user
+        mysqladmin -u root password $db_rootpassword
+        cat << EOF | mysql -u root --password=$db_rootpassword
+        CREATE DATABASE $db_name;
+        GRANT ALL PRIVILEGES ON $db_name.* TO "$db_username"@"%" IDENTIFIED BY "$db_password";
+        FLUSH PRIVILEGES;
+        EXIT
+        EOF
+        sudo -E systemctl restart mysql
+       
+  #---------------------------------------------------------------------
+  #                Owncloud Software Deployment
+  #---------------------------------------------------------------------  
+  deployment_config_owncloud:
+    depends_on: owncloud_instance
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      input_values:
+        db_name: { get_param: db_name }
+        db_username: { get_param: db_username }
+        db_password: { get_param: db_password }
+        db_host: { get_param: db_host }        
+        proxy_server: { get_param: proxy_server }
+        server_ip: { get_attr: [owncloud_instance, first_address] }
+        db_host: { get_attr: [mysql_instance, first_address] }
+      config:
+        get_resource: config_owncloud
+      server:
+        get_resource: owncloud_instance
+        
+  #---------------------------------------------------------------------
+  #                MariaDB Software Deployment
+  #---------------------------------------------------------------------  
+  deployment_config_mysql:
+    depends_on: mysql_instance
+    type: OS::Heat::SoftwareDeployment
+    properties:
+      input_values:
+        db_rootpassword: { get_param: db_root_password }
+        db_name: { get_param: db_name }
+        db_username: { get_param: db_username }
+        db_password: { get_param: db_password }
+        proxy_server: { get_param: proxy_server }
+        server_ip: { get_attr: [mysql_instance, first_address] }   
+      config:
+        get_resource: config_mysql
+      server:
+        get_resource: mysql_instance
+        
+outputs:
+  #---------------------------------------------------------------------
+  #                Owncloud Outputs
+  #---------------------------------------------------------------------  
+  OwnCloud_access_URL:
+    description: URL to access Owncloud
+    value:
+      str_replace:
+        template: https://host/owncloud
+        params:
+          host: { get_attr: [owncloud_instance, first_address] }
+  deployment_config_owncloud_stdout:
+    description: Standard output captured from the configuration execution.
+    value:
+      get_attr: [deployment_config_owncloud, deploy_stdout]
+  deployment_config_owncloud_stderr:
+    description: Standard error captured from the configuration execution.
+    value:
+      get_attr: [deployment_config_owncloud, deploy_stderr]  
+  #---------------------------------------------------------------------
+  #                MariaDB Outputs
+  #---------------------------------------------------------------------  
+  DatabaseURL:
+    description: URL for MariaDB
+    value:
+      str_replace:
+        template: host:3306
+        params:
+          host: { get_attr: [mysql_instance, first_address] }
+  deployment_config_mysql_stdout:
+    description: Standard output captured from the configuration execution.
+    value:
+      get_attr: [deployment_config_mysql, deploy_stdout]
+  deployment_config_mysql_stderr:
+    description: Standard error captured from the configuration execution.
+    value:
+      get_attr: [deployment_config_mysql, deploy_stderr]  
