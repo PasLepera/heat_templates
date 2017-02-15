@@ -1,7 +1,8 @@
 heat_template_version: 2013-05-23
 
 description: >
-  Install an Owncloud vm, with an external MariaDB vm.
+  Install an Owncloud vm with an external MariaDB vm.
+  Change the defaults.
 
 parameters:
 
@@ -11,17 +12,17 @@ parameters:
   key_name:
     type: string
     description: Name of a KeyPair to enable SSH access to the instance
-    default: "opstkcsi"  
+    default: "key"  
 
   owncloud_network:
     type: string
     description: Network used by the owncloud servers
-    default: "provider_318"
+    default: "network"
 
   proxy_server:
     type: string
     description: Proxy Server
-    default: "http://172.25.7.10:3128"
+    default: "http://proxy:port"
 
   #---------------------------------------------------------------------
   #                Owncloud Parameters
