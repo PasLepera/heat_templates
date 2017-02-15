@@ -2,7 +2,8 @@ heat_template_version: 2013-05-23
 
 description: >
   Install a MariaDB database on a vm.
-  Change the defaults.  
+  Change the defaults.
+   Works on ubuntu 16.
 parameters:
   #---------------------------------------------------------------------
   #                MariaDB Parameters
