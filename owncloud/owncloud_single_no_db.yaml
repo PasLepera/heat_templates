@@ -124,7 +124,7 @@ resources:
         sudo -E DEBIAN_FRONTEND=noninteractive apt-get -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" install owncloud
         # Security settings and HTTPS setup
         sudo -E ufw app info "Apache Full"
-        sudo -E sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/certs/apache.key -out /etc/ssl/certs/apache.crt -subj "/"
+        sudo -E sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 -keyout /etc/ssl/certs/apache.key -out /etc/ssl/certs/apache.crt -subj "/CN=$HOSTNAME"
         sudo -E sudo a2enmod rewrite
         sudo -E sudo a2enmod ssl
         sudo -E a2ensite default-ssl
